@@ -1,28 +1,21 @@
-This End User License Agreement ("Agreement") is a legal agreement between you ("User" or "you") and the creator of Linux Skyrim Mod Manager ("Licensor") for the software product accompanying this Agreement, which includes computer software in binary/executable form and may include associated media, printed materials, and "online" or electronic documentation ("Software"). 
-By installing, copying, or otherwise using the Software, you agree to be bound by the terms of this Agreement. If you do not agree to the terms of this Agreement, do not install or use the Software.
+MIT License
 
-1. LICENSE GRANT
-Licensor grants you a personal, non-exclusive, non-transferable, non-sublicensable, revocable license to use the Software solely for your personal, non-commercial entertainment use on a device running a compatible Linux operating system.
+Copyright (c) 2026 skyrim-modmgr contributors
 
-2. RESTRICTIONS ON USE
-You agree that you will not, and will not permit any third party to:
-a. Copy, distribute, rent, lease, lend, sub-license, or otherwise transfer the Software or any portion thereof to any third party.
-b. Modify, translate, adapt, or create derivative works based on the Software.
-c. Reverse engineer, decompile, disassemble, decrypt, or attempt to derive the source code, underlying algorithms, or file formats of the Software, in whole or in part.
-d. Circumvent or disable any technological protection measures or security features in the Software.
-e. Use the Software for any commercial, professional, or revenue-generating purposes.
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 
-3. INTELLECTUAL PROPERTY RIGHTS
-All title, ownership rights, and intellectual property rights in and to the Software (including but not limited to any code, images, text, and layout incorporated into the Software) are owned by the Licensor. The Software is protected by copyright laws and international treaty provisions. No title or ownership of the Software is transferred to you under this Agreement.
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
 
-4. TERMINATION
-This Agreement is effective until terminated. Your rights under this Agreement will terminate automatically without notice from the Licensor if you fail to comply with any term or condition of this Agreement. Upon termination, you must immediately cease all use of the Software and destroy all copies of the Software in your possession.
-
-5. DISCLAIMER OF WARRANTIES
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL THE LICENSOR BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY, INCLUDING BUT NOT LIMITED TO CORRUPTION OF GAME FILES, LOSS OF SAVE DATA, OR SYSTEM INSTABILITY, ARISING FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-6. GOVERNING LAW
-This Agreement shall be governed by and construed in accordance with the laws of the jurisdiction in which the Licensor resides, without regard to its conflict of law principles. Any legal action or proceeding arising under this Agreement will be brought exclusively in the courts located in that jurisdiction.
-
-7. ENTIRE AGREEMENT
-This Agreement constitutes the entire agreement between you and the Licensor concerning the Software and supersedes all prior or contemporaneous understandings regarding such subject matter.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

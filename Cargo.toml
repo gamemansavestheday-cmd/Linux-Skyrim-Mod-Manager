@@ -1,0 +1,59 @@
+[package]
+name = "skyrim_modmgr"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "A cross-platform (Linux + Windows) Skyrim mod manager using symlink/junction based virtual file systems"
+
+[lib]
+name = "skyrim_modmgr"
+path = "src/lib.rs"
+
+[[bin]]
+name = "skyrim-modmgr"
+path = "src/bin/cli.rs"
+
+[[bin]]
+name = "skyrim-modmgr-gui"
+path = "src/bin/gui.rs"
+required-features = ["gui"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+thiserror = "1"
+walkdir = "2"
+dirs = "5"
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
+time = "=0.3.36"
+getrandom = "=0.2.15"
+uuid = { version = "=1.10.0", features = ["v4", "serde"] }
+sevenz-rust = "0.5"
+crc = "=3.2.1"
+tar = "0.4"
+flate2 = "1"
+clap = { version = "=4.5.20", features = ["derive"] }
+
+[target.'cfg(windows)'.dependencies]
+junction = "1"
+
+[dependencies.eframe]
+version = "0.27"
+optional = true
+
+[dependencies.egui]
+version = "0.27"
+optional = true
+
+[dependencies.egui_extras]
+version = "0.27"
+optional = true
+
+[dependencies.rfd]
+version = "0.14"
+optional = true
+
+[features]
+default = ["gui"]
+gui = ["eframe", "egui", "egui_extras", "rfd"]
