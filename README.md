@@ -220,19 +220,9 @@ nothing about them depends on anything sandbox-specific.
 
 ## Known gaps / honest next steps
 
-- **No FOMOD installer wizard** — mods with FOMOD-based conditional
-  installers (very common for texture packs with install options) install
-  "as-is". A FOMOD XML parser + step wizard is the natural next feature.
 - **No BSA unpacking** — Skyrim loads `.bsa` archives directly so this is
   usually fine, but there's no support for unpacking a BSA to resolve
   conflicts at individual-loose-file granularity against it.
-- **No automated `#[test]` suite yet** — everything above was verified
-  manually with synthetic mods/games this session (see the list above).
-  Given how much surface area this now covers, adding real `#[test]`
-  coverage for `normalize_root`, `resolve_conflicts_detailed`,
   `validate::read_masters`, and the Linux VFS mount/unmount round-trip
   would be the highest-value next step before relying on this with a real
   modlist.
-- **Plugin load-order sorting is manual** — there's no LOOT-style automatic
-  sort by master dependency; `validate` will tell you about a missing
-  master but won't reorder plugins for you.
