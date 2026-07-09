@@ -70,6 +70,8 @@ enum Commands {
     },
     /// Add a tag to an installed mod.
     Tag { mod_id: String, tag: String },
+    /// List every distinct tag currently in use across the store.
+    ListTags,
     /// Show disk space used per mod, largest first, plus the total.
     DiskUsage,
     /// Search which installed mod(s) provide a given relative file path
@@ -477,6 +479,18 @@ fn run() -> Result<()> {
             let mut store = ModStore::load(&paths)?;
             store.add_tag(&paths, &mod_id, &tag)?;
             color::success(&format!("Tagged {mod_id} with '{tag}'"));
+        }
+
+        Commands::ListTags => {
+            let store = ModStore::load(&paths)?;
+            let tags = store.all_tags();
+            if tags.is_empty() {
+                color::info("No tags in use yet — tag a mod with `tag <mod-id> <tag>`.");
+            } else {
+                for tag in tags {
+                    println!("{tag}");
+                }
+            }
         }
 
         Commands::DiskUsage => {

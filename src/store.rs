@@ -137,6 +137,20 @@ impl ModStore {
         Ok(())
     }
 
+    /// Every distinct tag currently in use across the store, alphabetically.
+    /// Pure in-memory query — no fs I/O, so no `.with_context()` needed here
+    /// (that convention is for fallible filesystem operations specifically).
+    pub fn all_tags(&self) -> Vec<String> {
+        let mut tags: Vec<String> = self
+            .mods
+            .iter()
+            .flat_map(|m| m.tags.iter().cloned())
+            .collect();
+        tags.sort();
+        tags.dedup();
+        tags
+    }
+
     /// Every mod carrying a given tag.
     pub fn mods_with_tag<'a>(&'a self, tag: &'a str) -> impl Iterator<Item = &'a ModEntry> {
         self.mods.iter().filter(move |m| m.tags.iter().any(|t| t == tag))
@@ -721,6 +735,23 @@ mod tests {
         let hits = store.mods_providing_file("textures/armor.dds");
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].0, id);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn all_tags_deduped_and_sorted() {
+        let (root, paths) = tmp();
+        let mut store = ModStore::default();
+        let a = root.join("a");
+        let b = root.join("b");
+        fs::create_dir_all(&a).unwrap();
+        fs::create_dir_all(&b).unwrap();
+        let id_a = store.install(&paths, &a, Some("A".into())).unwrap();
+        let id_b = store.install(&paths, &b, Some("B".into())).unwrap();
+        store.add_tag(&paths, &id_a, "armor").unwrap();
+        store.add_tag(&paths, &id_a, "textures").unwrap();
+        store.add_tag(&paths, &id_b, "armor").unwrap(); // duplicate tag, different mod
+        assert_eq!(store.all_tags(), vec!["armor".to_string(), "textures".to_string()]);
         let _ = fs::remove_dir_all(&root);
     }
 

@@ -699,6 +699,38 @@ fn collect_rs_files(root: &Path) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
+/// Tracks whether each line of a file sits inside a `#[cfg(test)] mod ... {`
+/// block, so static scans can skip test code — unwraps/expects and other
+/// patterns are expected and fine there, and flagging them was a real
+/// false-positive bug in 0.02's doctor (see CHANGELOG). Returns a Vec the
+/// same length as `text.lines()`.
+fn test_module_mask(text: &str) -> Vec<bool> {
+    let mut mask = Vec::new();
+    let mut in_test_mod = false;
+    let mut test_mod_depth: i32 = 0;
+    let mut depth: i32 = 0;
+    let mut pending_cfg_test = false;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("#[cfg(test)]") {
+            pending_cfg_test = true;
+        }
+        let opens = trimmed.matches('{').count() as i32;
+        let closes = trimmed.matches('}').count() as i32;
+        if pending_cfg_test && trimmed.starts_with("mod ") && trimmed.contains('{') {
+            in_test_mod = true;
+            test_mod_depth = depth + opens;
+            pending_cfg_test = false;
+        }
+        depth += opens - closes;
+        if in_test_mod && depth < test_mod_depth {
+            in_test_mod = false;
+        }
+        mask.push(in_test_mod);
+    }
+    mask
+}
+
 fn check_unwrap_audit(root: &Path) -> Result<Vec<CheckItem>> {
     let cat = "unwrap()/expect() audit";
     let mut risky = Vec::new();
@@ -713,7 +745,11 @@ fn check_unwrap_audit(root: &Path) -> Result<Vec<CheckItem>> {
     for file in collect_rs_files(root)? {
         let text = fs::read_to_string(&file)?;
         let rel = file.strip_prefix(root).unwrap_or(&file);
+        let mask = test_module_mask(&text);
         for (lineno, line) in text.lines().enumerate() {
+            if mask.get(lineno).copied().unwrap_or(false) {
+                continue;
+            }
             let trimmed = line.trim();
             if trimmed.starts_with("//") {
                 continue;
@@ -774,8 +810,14 @@ fn check_path_assumptions(root: &Path) -> Result<Vec<CheckItem>> {
     let mut findings = Vec::new();
 
     for file in collect_rs_files(root)? {
-        let text = fs::read_to_string(&file)?;
         let rel = file.strip_prefix(root).unwrap_or(&file);
+        // This scanner's own pattern-matching string literals (e.g. the
+        // "/home/" substring checks a few lines below) would otherwise
+        // flag themselves — that was a real false-positive bug in 0.02.
+        if rel.to_string_lossy().contains("check.rs") {
+            continue;
+        }
+        let text = fs::read_to_string(&file)?;
         for (lineno, line) in text.lines().enumerate() {
             let trimmed = line.trim();
             if trimmed.starts_with("//") {
@@ -1195,5 +1237,43 @@ mod tests {
         assert!(r.to_markdown().contains("example"));
         assert!(r.to_terminal().contains("example"));
         assert!(r.passed());
+    }
+
+    /// Regression test for the 0.02 doctor false-positive: unwraps inside a
+    /// `#[cfg(test)] mod tests { ... }` block must be masked out, while an
+    /// unwrap sitting just outside (before/after) the block must not be.
+    #[test]
+    fn test_module_mask_covers_only_the_test_mod() {
+        let text = "\
+fn real_code() {
+    let x = something().unwrap();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_test() {
+        let y = setup().unwrap();
+        assert!(y.is_ok());
+    }
+}
+
+fn more_real_code() {
+    let z = other().unwrap();
+}
+";
+        let mask = test_module_mask(text);
+        let lines: Vec<&str> = text.lines().collect();
+        for (i, line) in lines.iter().enumerate() {
+            let in_test = mask[i];
+            if line.contains("something().unwrap()") || line.contains("other().unwrap()") {
+                assert!(!in_test, "line {i} ({line:?}) should NOT be masked as test code");
+            }
+            if line.contains("setup().unwrap()") {
+                assert!(in_test, "line {i} ({line:?}) SHOULD be masked as test code");
+            }
+        }
     }
 }
