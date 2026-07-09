@@ -6,6 +6,7 @@ per-game profiles. MIT licensed.
 
 **Versioning:** this project counts up 0.01, 0.02, 0.03, ... and hits 1.00
 at 0.20 (20 releases to a stable 1.0 — pick your own reason for the number).
+(keeps the same formatting 1.01 and so on...)
 In Cargo/semver terms that's `0.1.0`, `0.2.0`, ... `0.19.0`, then `1.0.0` at
 the 20th release, since Cargo requires real semver. This is `0.1.0` / v0.01.
 
