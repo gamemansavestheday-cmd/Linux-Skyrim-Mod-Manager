@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 use crate::app_paths::AppPaths;
+use crate::config::LoadOutcome;
 
 /// Metadata for one mod sitting in the global store.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,19 +40,61 @@ const MANIFEST_FILE: &str = "store.json";
 
 impl ModStore {
     pub fn load(paths: &AppPaths) -> Result<Self> {
+        match Self::load_with_repair(paths)? {
+            LoadOutcome::Ok(s) | LoadOutcome::Missing(s) => Ok(s),
+            LoadOutcome::Repaired { value, backup_path } => {
+                eprintln!(
+                    "warning: store.json was corrupt and has been reset to an empty store. \
+                     Broken file kept at {}. Installed mod folders under mods/ were NOT deleted \
+                     — you may need to re-register them.",
+                    backup_path.display()
+                );
+                Ok(value)
+            }
+        }
+    }
+
+    /// Load the mod store, quarantining a corrupt `store.json` instead of
+    /// crashing. Does not delete mod content directories.
+    pub fn load_with_repair(paths: &AppPaths) -> Result<LoadOutcome<Self>> {
         let manifest = paths.root.join(MANIFEST_FILE);
         if !manifest.exists() {
-            return Ok(Self::default());
+            return Ok(LoadOutcome::Missing(Self::default()));
         }
         let data = fs::read_to_string(&manifest)
-            .with_context(|| format!("reading {}", manifest.display()))?;
-        Ok(serde_json::from_str(&data)?)
+            .with_context(|| format!("reading mod store {}", manifest.display()))?;
+        match serde_json::from_str::<Self>(&data) {
+            Ok(s) => Ok(LoadOutcome::Ok(s)),
+            Err(e) => {
+                let backup = paths.root.join(format!(
+                    "store.json.corrupt.{}",
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0)
+                ));
+                fs::rename(&manifest, &backup).with_context(|| {
+                    format!(
+                        "quarantining corrupt store {} -> {} (parse error: {e})",
+                        manifest.display(),
+                        backup.display()
+                    )
+                })?;
+                let value = Self::default();
+                value.save(paths)?;
+                Ok(LoadOutcome::Repaired {
+                    value,
+                    backup_path: backup,
+                })
+            }
+        }
     }
 
     pub fn save(&self, paths: &AppPaths) -> Result<()> {
         let manifest = paths.root.join(MANIFEST_FILE);
-        let data = serde_json::to_string_pretty(self)?;
-        fs::write(&manifest, data)?;
+        let data = serde_json::to_string_pretty(self).context("serializing store.json")?;
+        fs::write(&manifest, data)
+            .with_context(|| format!("writing mod store {}", manifest.display()))?;
         Ok(())
     }
 
@@ -112,16 +155,49 @@ impl ModStore {
         source: &Path,
         display_name: Option<String>,
     ) -> Result<String> {
+        self.install_with_progress(paths, source, display_name, None)
+    }
+
+    /// Like `install`, but reports stage messages through `progress` (e.g. for
+    /// a CLI progress line on large archives).
+    pub fn install_with_progress(
+        &mut self,
+        paths: &AppPaths,
+        source: &Path,
+        display_name: Option<String>,
+        progress: Option<&dyn Fn(&str)>,
+    ) -> Result<String> {
         if !source.exists() {
-            bail!("source path does not exist: {}", source.display());
+            bail!(
+                "source path does not exist: {}\n\
+                 Hint: check the path for typos, or pass a folder/.zip/.7z/.tar.gz/loose file.",
+                source.display()
+            );
         }
 
         let id = Uuid::new_v4().to_string();
         let content_dir = paths.mods.join(&id);
-        fs::create_dir_all(&content_dir)?;
+        fs::create_dir_all(&content_dir).with_context(|| {
+            format!("creating mod content directory {}", content_dir.display())
+        })?;
 
-        install_source_into(source, &content_dir)?;
-        normalize_root(&content_dir)?;
+        let report = |msg: &str| {
+            if let Some(cb) = progress {
+                cb(msg);
+            }
+        };
+
+        report(&format!("extracting {}…", source.display()));
+        if let Err(e) = install_source_into(source, &content_dir) {
+            // Don't leave a half-extracted mod dir sitting in the store.
+            let _ = fs::remove_dir_all(&content_dir);
+            return Err(e).with_context(|| {
+                format!("installing from {}", source.display())
+            });
+        }
+        report("normalizing folder layout…");
+        normalize_root(&content_dir)
+            .with_context(|| format!("normalizing mod root {}", content_dir.display()))?;
 
         let name = display_name.unwrap_or_else(|| {
             source
@@ -144,7 +220,126 @@ impl ModStore {
         };
         self.mods.push(entry);
         self.save(paths)?;
+        report("done");
         Ok(id)
+    }
+
+    /// Estimate how many bytes (and files) extracting/copying `source` would
+    /// consume, without writing anything. Used for install-size preview and
+    /// "disk space tight" warnings.
+    pub fn estimate_install_size(source: &Path) -> Result<InstallSizeEstimate> {
+        if !source.exists() {
+            bail!("source path does not exist: {}", source.display());
+        }
+        if source.is_dir() {
+            let mut bytes = 0u64;
+            let mut files = 0u64;
+            for entry in walkdir::WalkDir::new(source)
+                .into_iter()
+                .filter_map(|e| e.ok())
+                .filter(|e| e.file_type().is_file())
+            {
+                files += 1;
+                bytes += entry.metadata().map(|m| m.len()).unwrap_or(0);
+            }
+            return Ok(InstallSizeEstimate {
+                bytes,
+                files,
+                source_kind: "folder".into(),
+            });
+        }
+
+        let lower_name = source.to_string_lossy().to_lowercase();
+        let ext = source
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_lowercase());
+
+        if lower_name.ends_with(".tar.gz") || lower_name.ends_with(".tgz") || ext.as_deref() == Some("tar")
+        {
+            // Full unpack would be needed for an exact number; use compressed
+            // size as a lower bound and note uncertainty.
+            let compressed = fs::metadata(source)
+                .with_context(|| format!("stat {}", source.display()))?
+                .len();
+            return Ok(InstallSizeEstimate {
+                bytes: compressed.saturating_mul(3), // rough inflate guess
+                files: 0,
+                source_kind: format!(
+                    "tar archive (compressed {} bytes; extracted size estimated ×3)",
+                    compressed
+                ),
+            });
+        }
+
+        match ext.as_deref() {
+            Some("zip") => {
+                let file = fs::File::open(source)
+                    .with_context(|| format!("opening zip {}", source.display()))?;
+                let mut zip = zip::ZipArchive::new(file)
+                    .with_context(|| format!("reading zip central directory {}", source.display()))?;
+                let mut bytes = 0u64;
+                let mut files = 0u64;
+                for i in 0..zip.len() {
+                    if let Ok(entry) = zip.by_index(i) {
+                        if entry.is_file() {
+                            bytes += entry.size();
+                            files += 1;
+                        }
+                    }
+                }
+                Ok(InstallSizeEstimate {
+                    bytes,
+                    files,
+                    source_kind: "zip".into(),
+                })
+            }
+            Some("7z") => {
+                let compressed = fs::metadata(source)?.len();
+                Ok(InstallSizeEstimate {
+                    bytes: compressed.saturating_mul(4),
+                    files: 0,
+                    source_kind: format!(
+                        "7z archive (compressed {compressed} bytes; extracted size estimated ×4)"
+                    ),
+                })
+            }
+            Some("rar") => bail!(
+                ".rar is not supported. Re-pack as .zip/.7z or extract to a folder first."
+            ),
+            _ => {
+                let bytes = fs::metadata(source)
+                    .with_context(|| format!("stat {}", source.display()))?
+                    .len();
+                Ok(InstallSizeEstimate {
+                    bytes,
+                    files: 1,
+                    source_kind: "loose file".into(),
+                })
+            }
+        }
+    }
+
+    /// Find every enabled (or all) mod that provides a given relative path
+    /// (case-insensitive). Returns (mod_id, mod_name, actual relative path).
+    pub fn mods_providing_file(&self, relative: &str) -> Vec<(String, String, PathBuf)> {
+        let needle = relative.replace('\\', "/").to_lowercase();
+        let mut hits = Vec::new();
+        for m in &self.mods {
+            for file in walkdir::WalkDir::new(&m.content_dir)
+                .into_iter()
+                .filter_map(|e| e.ok())
+                .filter(|e| e.file_type().is_file())
+            {
+                if let Ok(rel) = file.path().strip_prefix(&m.content_dir) {
+                    let key = rel.to_string_lossy().replace('\\', "/").to_lowercase();
+                    if key == needle || key.ends_with(&needle) || key.contains(&needle) {
+                        hits.push((m.id.clone(), m.name.clone(), rel.to_path_buf()));
+                    }
+                }
+            }
+        }
+        hits
     }
 
     /// Every esp/esm/esl file name a mod provides (used to auto-populate a
@@ -174,14 +369,23 @@ impl ModStore {
     /// mod keeps working after the update instead of needing to be edited.
     pub fn update(&mut self, paths: &AppPaths, id: &str, source: &Path) -> Result<()> {
         let content_dir = {
-            let entry = self.get(id).context("no such mod id")?;
+            let entry = self
+                .get(id)
+                .with_context(|| format!("no such mod id '{id}' — try list-mods"))?;
             entry.content_dir.clone()
         };
-        if content_dir.exists() {
-            fs::remove_dir_all(&content_dir)?;
+        if !source.exists() {
+            bail!("update source does not exist: {}", source.display());
         }
-        fs::create_dir_all(&content_dir)?;
-        install_source_into(source, &content_dir)?;
+        if content_dir.exists() {
+            fs::remove_dir_all(&content_dir).with_context(|| {
+                format!("removing old content for mod {id} at {}", content_dir.display())
+            })?;
+        }
+        fs::create_dir_all(&content_dir)
+            .with_context(|| format!("recreating content dir {}", content_dir.display()))?;
+        install_source_into(source, &content_dir)
+            .with_context(|| format!("updating mod {id} from {}", source.display()))?;
         normalize_root(&content_dir)?;
         if let Some(entry) = self.mods.iter_mut().find(|m| m.id == id) {
             entry.installed_at = std::time::SystemTime::now()
@@ -341,21 +545,28 @@ fn extract_tar_gz(archive: &Path, dest: &Path) -> Result<()> {
 fn extract_zip(archive: &Path, dest: &Path) -> Result<()> {
     let file = fs::File::open(archive)
         .with_context(|| format!("opening zip {}", archive.display()))?;
-    let mut zip = zip::ZipArchive::new(file)?;
+    let mut zip = zip::ZipArchive::new(file)
+        .with_context(|| format!("reading zip archive {}", archive.display()))?;
     for i in 0..zip.len() {
-        let mut entry = zip.by_index(i)?;
+        let mut entry = zip
+            .by_index(i)
+            .with_context(|| format!("reading zip entry {i} from {}", archive.display()))?;
         let out_path = match entry.enclosed_name() {
             Some(p) => dest.join(p),
-            None => continue,
+            None => continue, // path traversal / absolute path — skip
         };
         if entry.name().ends_with('/') {
-            fs::create_dir_all(&out_path)?;
+            fs::create_dir_all(&out_path)
+                .with_context(|| format!("creating zip dir {}", out_path.display()))?;
         } else {
             if let Some(parent) = out_path.parent() {
-                fs::create_dir_all(parent)?;
+                fs::create_dir_all(parent)
+                    .with_context(|| format!("creating zip parent {}", parent.display()))?;
             }
-            let mut out_file = fs::File::create(&out_path)?;
-            std::io::copy(&mut entry, &mut out_file)?;
+            let mut out_file = fs::File::create(&out_path)
+                .with_context(|| format!("creating extracted file {}", out_path.display()))?;
+            std::io::copy(&mut entry, &mut out_file)
+                .with_context(|| format!("extracting zip member to {}", out_path.display()))?;
         }
     }
     Ok(())
@@ -369,17 +580,172 @@ fn extract_7z(archive: &Path, dest: &Path) -> Result<()> {
 
 fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<()> {
     for entry in walkdir::WalkDir::new(src) {
-        let entry = entry?;
-        let rel = entry.path().strip_prefix(src)?;
+        let entry = entry.with_context(|| format!("walking {}", src.display()))?;
+        let rel = entry
+            .path()
+            .strip_prefix(src)
+            .with_context(|| format!("strip prefix {} from {}", src.display(), entry.path().display()))?;
         let target = dest.join(rel);
         if entry.file_type().is_dir() {
-            fs::create_dir_all(&target)?;
+            fs::create_dir_all(&target)
+                .with_context(|| format!("creating directory {}", target.display()))?;
         } else if entry.file_type().is_file() {
             if let Some(parent) = target.parent() {
-                fs::create_dir_all(parent)?;
+                fs::create_dir_all(parent)
+                    .with_context(|| format!("creating parent {}", parent.display()))?;
             }
-            fs::copy(entry.path(), &target)?;
+            fs::copy(entry.path(), &target).with_context(|| {
+                format!(
+                    "copying {} -> {}",
+                    entry.path().display(),
+                    target.display()
+                )
+            })?;
         }
     }
     Ok(())
+}
+
+/// Preview of how large an install would be on disk.
+#[derive(Debug, Clone)]
+pub struct InstallSizeEstimate {
+    pub bytes: u64,
+    pub files: u64,
+    pub source_kind: String,
+}
+
+/// Available free space on the filesystem that holds `path`, if we can
+/// determine it (best-effort via `df` on Unix). Used to warn before a large
+/// install — never blocks install on its own.
+pub fn free_space_for(path: &Path) -> Option<u64> {
+    let mut p = path.to_path_buf();
+    while !p.exists() {
+        if !p.pop() {
+            break;
+        }
+    }
+    let output = std::process::Command::new("df")
+        .args(["-Pk", &p.to_string_lossy()])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    // df -Pk: Portable format, 1024-byte blocks. Second line, 4th column = available.
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let line = stdout.lines().nth(1)?;
+    let avail_k: u64 = line.split_whitespace().nth(3)?.parse().ok()?;
+    Some(avail_k.saturating_mul(1024))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_paths::AppPaths;
+
+    fn tmp() -> (PathBuf, AppPaths) {
+        let root = std::env::temp_dir().join(format!(
+            "skyrim-modmgr-store-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let paths = AppPaths::new(root.join("app")).unwrap();
+        (root, paths)
+    }
+
+    #[test]
+    fn normalize_unwraps_single_wrapper() {
+        let (root, _) = tmp();
+        let dir = root.join("content");
+        fs::create_dir_all(dir.join("CoolMod").join("meshes")).unwrap();
+        fs::write(dir.join("CoolMod").join("meshes").join("a.nif"), b"x").unwrap();
+        // Move CoolMod contents structure: content/CoolMod/meshes/a.nif
+        normalize_root(&dir).unwrap();
+        assert!(dir.join("meshes").join("a.nif").is_file());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn normalize_unwraps_data_folder() {
+        let (root, _) = tmp();
+        let dir = root.join("content");
+        fs::create_dir_all(dir.join("Data").join("textures")).unwrap();
+        fs::write(dir.join("Data").join("textures").join("a.dds"), b"x").unwrap();
+        normalize_root(&dir).unwrap();
+        assert!(dir.join("textures").join("a.dds").is_file());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn install_folder_and_loose_file() {
+        let (root, paths) = tmp();
+        let mut store = ModStore::default();
+
+        let folder = root.join("mod");
+        fs::create_dir_all(folder.join("scripts")).unwrap();
+        fs::write(folder.join("scripts").join("x.pex"), b"p").unwrap();
+        let id = store.install(&paths, &folder, Some("FolderMod".into())).unwrap();
+        assert!(store.get(&id).unwrap().content_dir.join("scripts").join("x.pex").is_file());
+
+        let loose = root.join("Lone.esp");
+        fs::write(&loose, b"TES4").unwrap();
+        let id2 = store.install(&paths, &loose, None).unwrap();
+        assert!(store.get(&id2).unwrap().content_dir.join("Lone.esp").is_file());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn missing_source_errors() {
+        let (root, paths) = tmp();
+        let mut store = ModStore::default();
+        let err = store
+            .install(&paths, &root.join("nope.zip"), None)
+            .unwrap_err();
+        assert!(err.to_string().contains("does not exist"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn which_mod_provides_case_insensitive() {
+        let (root, paths) = tmp();
+        let mut store = ModStore::default();
+        let folder = root.join("mod");
+        fs::create_dir_all(folder.join("textures")).unwrap();
+        fs::write(folder.join("textures").join("Armor.dds"), b"x").unwrap();
+        let id = store.install(&paths, &folder, Some("Tex".into())).unwrap();
+        let hits = store.mods_providing_file("textures/armor.dds");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].0, id);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn estimate_folder_size() {
+        let (root, _) = tmp();
+        let folder = root.join("mod");
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(folder.join("a.bin"), vec![0u8; 100]).unwrap();
+        fs::write(folder.join("b.bin"), vec![0u8; 50]).unwrap();
+        let est = ModStore::estimate_install_size(&folder).unwrap();
+        assert_eq!(est.bytes, 150);
+        assert_eq!(est.files, 2);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn corrupt_store_json_is_repaired() {
+        let (root, paths) = tmp();
+        fs::write(paths.root.join("store.json"), b"{not json!!!").unwrap();
+        let outcome = ModStore::load_with_repair(&paths).unwrap();
+        match outcome {
+            LoadOutcome::Repaired { value, .. } => assert!(value.mods.is_empty()),
+            other => panic!("expected Repaired, got {other:?}"),
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
 }

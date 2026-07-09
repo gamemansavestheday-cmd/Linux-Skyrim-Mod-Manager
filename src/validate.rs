@@ -35,7 +35,10 @@ pub fn read_masters(plugin_path: &Path) -> Vec<String> {
     read_masters_from_bytes(&bytes)
 }
 
-fn read_masters_from_bytes(bytes: &[u8]) -> Vec<String> {
+/// Parse masters from an already-loaded plugin byte buffer. Public so the
+/// doctor/fuzz harness and unit tests can feed synthetic/corrupt headers
+/// without touching the filesystem.
+pub fn read_masters_from_bytes(bytes: &[u8]) -> Vec<String> {
     const HEADER_LEN: usize = 24;
     if bytes.len() < HEADER_LEN || &bytes[0..4] != b"TES4" {
         return Vec::new();
@@ -111,4 +114,71 @@ pub fn check_missing_masters(
         }
     }
     problems
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fake_tes4(masters: &[&str]) -> Vec<u8> {
+        let mut data = Vec::new();
+        for m in masters {
+            data.extend_from_slice(b"MAST");
+            let mut body = m.as_bytes().to_vec();
+            body.push(0);
+            data.extend_from_slice(&(body.len() as u16).to_le_bytes());
+            data.extend_from_slice(&body);
+        }
+        let mut out = Vec::new();
+        out.extend_from_slice(b"TES4");
+        out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        out.extend_from_slice(&[0u8; 16]);
+        out.extend_from_slice(&data);
+        out
+    }
+
+    #[test]
+    fn reads_multiple_masters() {
+        let bytes = fake_tes4(&["Skyrim.esm", "Update.esm", "Dawnguard.esm"]);
+        assert_eq!(
+            read_masters_from_bytes(&bytes),
+            vec!["Skyrim.esm", "Update.esm", "Dawnguard.esm"]
+        );
+    }
+
+    #[test]
+    fn rejects_non_tes4_and_truncated() {
+        assert!(read_masters_from_bytes(b"").is_empty());
+        assert!(read_masters_from_bytes(b"XXXX").is_empty());
+        assert!(read_masters_from_bytes(b"TES").is_empty());
+        let mut bytes = fake_tes4(&["Skyrim.esm"]);
+        bytes.truncate(10);
+        assert!(read_masters_from_bytes(&bytes).is_empty());
+    }
+
+    #[test]
+    fn missing_masters_case_insensitive() {
+        let dir = std::env::temp_dir().join(format!(
+            "skyrim-modmgr-validate-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let esp = dir.join("MyMod.esp");
+        std::fs::write(&esp, fake_tes4(&["Skyrim.esm", "Update.esm"])).unwrap();
+
+        let problems = check_missing_masters(
+            &["MyMod.esp".into(), "skyrim.esm".into()],
+            |name| {
+                if name.eq_ignore_ascii_case("MyMod.esp") {
+                    Some(esp.clone())
+                } else {
+                    None
+                }
+            },
+        );
+        assert_eq!(problems.len(), 1);
+        assert_eq!(problems[0].missing, vec!["Update.esm"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

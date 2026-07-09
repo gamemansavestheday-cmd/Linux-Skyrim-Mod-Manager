@@ -198,3 +198,53 @@ impl Profile {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_paths::AppPaths;
+    use crate::store::ModStore;
+    use std::fs;
+
+    #[test]
+    fn enable_disable_reorder() {
+        let root = std::env::temp_dir().join(format!(
+            "skyrim-modmgr-profile-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let paths = AppPaths::new(root.join("app")).unwrap();
+        let mut p = Profile::new("Main", "gid");
+        p.enable_mod("a");
+        p.enable_mod("b");
+        p.enable_mod("c");
+        assert_eq!(p.mod_order.len(), 3);
+        p.reorder("c", 0);
+        assert_eq!(p.mod_order[0].mod_id, "c");
+        p.disable_mod("b");
+        assert!(!p.mod_order.iter().find(|m| m.mod_id == "b").unwrap().enabled);
+        p.save(&paths).unwrap();
+        let loaded = Profile::load(&paths, "Main").unwrap();
+        assert_eq!(loaded.mod_order.len(), 3);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn enable_with_plugins_registers_esp() {
+        let root = std::env::temp_dir().join(format!(
+            "skyrim-modmgr-profile-plugins-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let paths = AppPaths::new(root.join("app")).unwrap();
+        let mut store = ModStore::default();
+        let mod_dir = root.join("mod");
+        fs::create_dir_all(&mod_dir).unwrap();
+        fs::write(mod_dir.join("Cool.esp"), b"TES4").unwrap();
+        let id = store.install(&paths, &mod_dir, Some("Cool".into())).unwrap();
+        let mut p = Profile::new("P", "g");
+        p.enable_mod_with_plugins(&store, &id);
+        assert!(p.plugin_order.iter().any(|x| x == "Cool.esp"));
+        let _ = fs::remove_dir_all(&root);
+    }
+}

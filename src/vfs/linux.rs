@@ -41,9 +41,12 @@ impl LinkBackend for LinuxBackend {
 
         if data_dir.exists() && !is_our_link {
             if let Some(parent) = backup_dir.parent() {
-                std::fs::create_dir_all(parent)?;
+                std::fs::create_dir_all(parent).with_context(|| {
+                    format!("creating backup parent {}", parent.display())
+                })?;
             }
             if !backup_dir.exists() {
+                // First deploy: move the real vanilla Data aside.
                 std::fs::rename(data_dir, backup_dir).with_context(|| {
                     format!(
                         "backing up original Data folder {} -> {}",
@@ -51,9 +54,30 @@ impl LinkBackend for LinuxBackend {
                         backup_dir.display()
                     )
                 })?;
+            } else {
+                // Vanilla is already safe in backup_dir, but a real directory
+                // is sitting at data_dir (partial failure, Steam verify, etc).
+                // Remove it so we can remount; never leave both in place or
+                // the subsequent symlink fails and Data stays half-broken.
+                if data_dir.is_dir() {
+                    std::fs::remove_dir_all(data_dir).with_context(|| {
+                        format!(
+                            "removing leftover Data directory at {} before remount \
+                             (vanilla backup is at {})",
+                            data_dir.display(),
+                            backup_dir.display()
+                        )
+                    })?;
+                } else {
+                    std::fs::remove_file(data_dir).with_context(|| {
+                        format!("removing leftover Data entry {}", data_dir.display())
+                    })?;
+                }
             }
         } else if is_our_link {
-            std::fs::remove_file(data_dir)?;
+            std::fs::remove_file(data_dir).with_context(|| {
+                format!("removing previous Data symlink {}", data_dir.display())
+            })?;
         }
 
         if let Some(parent) = data_dir.parent() {
@@ -75,10 +99,30 @@ impl LinkBackend for LinuxBackend {
             .map(|m| m.file_type().is_symlink())
             .unwrap_or(false);
         if is_our_link {
-            std::fs::remove_file(data_dir)?;
+            std::fs::remove_file(data_dir).with_context(|| {
+                format!("removing Data symlink during restore {}", data_dir.display())
+            })?;
+        } else if data_dir.exists() && backup_dir.exists() {
+            // Not our link but backup exists — clear the path so vanilla
+            // can be moved back (avoids "destination exists" on rename).
+            if data_dir.is_dir() {
+                std::fs::remove_dir_all(data_dir).with_context(|| {
+                    format!("clearing Data path before restore {}", data_dir.display())
+                })?;
+            } else {
+                std::fs::remove_file(data_dir).with_context(|| {
+                    format!("clearing Data path before restore {}", data_dir.display())
+                })?;
+            }
         }
         if backup_dir.exists() {
-            std::fs::rename(backup_dir, data_dir)?;
+            std::fs::rename(backup_dir, data_dir).with_context(|| {
+                format!(
+                    "restoring vanilla Data {} <- {}",
+                    data_dir.display(),
+                    backup_dir.display()
+                )
+            })?;
         }
         Ok(())
     }

@@ -191,3 +191,38 @@ fn my_games_folder_name(edition: GameEdition) -> &'static str {
         GameEdition::VR => "Skyrim VR",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn game_id_is_deterministic() {
+        let root = std::env::temp_dir().join(format!(
+            "skyrim-modmgr-gameid-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("SkyrimSE.exe"), b"x").unwrap();
+        fs::create_dir_all(root.join("Data")).unwrap();
+
+        let a = find_skyrim_at(&root, &root).expect("SE");
+        let b = find_skyrim_at(&root, &root).expect("SE again");
+        assert_eq!(a.id, b.id);
+        assert_eq!(a.edition, GameEdition::SE);
+        assert_eq!(a.data_dir, root.join("Data"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn derive_id_stable_for_same_path() {
+        let p = PathBuf::from("/tmp/some/skyrim/install");
+        assert_eq!(derive_id(&p), derive_id(&p));
+    }
+}

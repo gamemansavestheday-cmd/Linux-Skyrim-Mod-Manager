@@ -60,7 +60,9 @@ impl LinkBackend for WindowsBackend {
 
         if data_dir.exists() && !is_our_junction {
             if let Some(parent) = backup_dir.parent() {
-                std::fs::create_dir_all(parent)?;
+                std::fs::create_dir_all(parent).with_context(|| {
+                    format!("creating backup parent {}", parent.display())
+                })?;
             }
             if !backup_dir.exists() {
                 std::fs::rename(data_dir, backup_dir).with_context(|| {
@@ -70,9 +72,29 @@ impl LinkBackend for WindowsBackend {
                         backup_dir.display()
                     )
                 })?;
+            } else {
+                // Vanilla already backed up; leftover real Data must go so
+                // the junction can be created (same edge case as Linux).
+                if data_dir.is_dir() {
+                    std::fs::remove_dir_all(data_dir).with_context(|| {
+                        format!(
+                            "removing leftover Data directory at {} before remount \
+                             (vanilla backup is at {})",
+                            data_dir.display(),
+                            backup_dir.display()
+                        )
+                    })?;
+                } else {
+                    std::fs::remove_file(data_dir).with_context(|| {
+                        format!("removing leftover Data entry {}", data_dir.display())
+                    })?;
+                }
             }
         } else if is_our_junction {
-            std::fs::remove_dir(data_dir)?; // removing a junction point removes only the link
+            // Removing a junction point removes only the link, not the target.
+            std::fs::remove_dir(data_dir).with_context(|| {
+                format!("removing previous Data junction {}", data_dir.display())
+            })?;
         }
 
         if let Some(parent) = data_dir.parent() {
@@ -90,10 +112,28 @@ impl LinkBackend for WindowsBackend {
 
     fn unmount(&self, data_dir: &Path, backup_dir: &Path) -> Result<()> {
         if junction::exists(data_dir).unwrap_or(false) {
-            std::fs::remove_dir(data_dir)?;
+            std::fs::remove_dir(data_dir).with_context(|| {
+                format!("removing Data junction during restore {}", data_dir.display())
+            })?;
+        } else if data_dir.exists() && backup_dir.exists() {
+            if data_dir.is_dir() {
+                std::fs::remove_dir_all(data_dir).with_context(|| {
+                    format!("clearing Data path before restore {}", data_dir.display())
+                })?;
+            } else {
+                std::fs::remove_file(data_dir).with_context(|| {
+                    format!("clearing Data path before restore {}", data_dir.display())
+                })?;
+            }
         }
         if backup_dir.exists() {
-            std::fs::rename(backup_dir, data_dir)?;
+            std::fs::rename(backup_dir, data_dir).with_context(|| {
+                format!(
+                    "restoring vanilla Data {} <- {}",
+                    data_dir.display(),
+                    backup_dir.display()
+                )
+            })?;
         }
         Ok(())
     }

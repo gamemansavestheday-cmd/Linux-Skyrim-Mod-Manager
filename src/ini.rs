@@ -49,7 +49,7 @@ pub fn set_ini_value(path: &Path, section: &str, key: &str, value: &str) -> Resu
         }
         None => {
             // Section doesn't exist yet — append it at the end of the file.
-            if !lines.is_empty() && !lines.last().unwrap().is_empty() {
+            if !lines.is_empty() && lines.last().is_some_and(|l| !l.is_empty()) {
                 lines.push(String::new());
             }
             lines.push(section_header);
@@ -85,4 +85,32 @@ pub fn get_ini_value(path: &Path, section: &str, key: &str) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn set_and_get_roundtrip() {
+        let path = std::env::temp_dir().join(format!(
+            "skyrim-modmgr-ini-{}-{}.ini",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = fs::remove_file(&path);
+        set_ini_value(&path, "Display", "iMaxAnisotropy", "16").unwrap();
+        assert_eq!(get_ini_value(&path, "Display", "iMaxAnisotropy").as_deref(), Some("16"));
+        set_ini_value(&path, "Display", "iMaxAnisotropy", "8").unwrap();
+        assert_eq!(get_ini_value(&path, "display", "IMAXANISOTROPY").as_deref(), Some("8"));
+        set_ini_value(&path, "Audio", "fVolume", "0.5").unwrap();
+        let contents = fs::read_to_string(&path).unwrap();
+        assert!(contents.contains("[Display]"));
+        assert!(contents.contains("[Audio]"));
+        let _ = fs::remove_file(&path);
+    }
 }
