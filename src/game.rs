@@ -14,7 +14,7 @@ pub enum GameEdition {
 }
 
 impl GameEdition {
-    fn exe_and_appid(self) -> (&'static str, &'static str) {
+    pub fn exe_and_appid(self) -> (&'static str, &'static str) {
         match self {
             GameEdition::LE => ("TESV.exe", "72850"),
             GameEdition::SE | GameEdition::AE => ("SkyrimSE.exe", "489830"),
@@ -158,6 +158,84 @@ pub fn scan_all_prefixes_for_skyrim() -> Vec<DetectedGame> {
             });
         }
     }
+    results
+}
+
+
+/// Default folders (relative to $HOME) worth checking directly for a
+/// Skyrim install that isn't inside any Wine prefix at all — a portable
+/// copy, a DRM-free install extracted by hand, a Steam/GOG library placed
+/// somewhere non-standard, etc. Shallow (bounded-depth) search, since these
+/// are ordinary user folders that could contain a lot of unrelated stuff.
+const DEFAULT_SCAN_FOLDERS: &[&str] = &["Downloads", "Games", "Desktop"];
+
+/// Search a single directory tree (bounded depth) for a Skyrim install,
+/// treating any match as `wine_prefix: None` — same "native" handling as
+/// `find_skyrim_at`, since we don't know or need to know whether it's
+/// running under Wine, a Steam library, or nothing at all; the file
+/// presence is all that matters for mod-managing it.
+fn scan_folder_for_skyrim(root: &Path, max_depth: usize) -> Vec<DetectedGame> {
+    let mut results = Vec::new();
+    if !root.is_dir() {
+        return results;
+    }
+    for entry in walkdir::WalkDir::new(root)
+        .max_depth(max_depth)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_dir())
+    {
+        let dir = entry.path();
+        let has_exe = [GameEdition::SE, GameEdition::LE, GameEdition::VR]
+            .iter()
+            .any(|e| dir.join(e.exe_and_appid().0).is_file());
+        if !has_exe {
+            continue;
+        }
+        // Use the directory itself as both install_dir and (best-effort)
+        // my_games_root — a folder found this way has no known "My Games"
+        // location; plugins.txt path will be wrong until the person's My
+        // Games folder is confirmed some other way (deploy still works for
+        // the Data/VFS side regardless, since that doesn't depend on
+        // plugins.txt's location being right until first deploy).
+        if let Some(game) = find_skyrim_at(dir, dir) {
+            let data_dir_modified_secs = std::fs::metadata(&game.data_dir)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs());
+            results.push(DetectedGame {
+                game,
+                source_label: format!("Found at {}", dir.display()),
+                data_dir_modified_secs,
+            });
+        }
+    }
+    results
+}
+
+/// Scan default common folders (Downloads/Games/Desktop under $HOME) plus
+/// any custom paths the person has added (see `Config::add_search_path`),
+/// for a Skyrim install that isn't inside a Wine prefix at all.
+pub fn scan_custom_locations(extra_search_paths: &[std::path::PathBuf]) -> Vec<DetectedGame> {
+    let mut results = Vec::new();
+    if let Some(home) = dirs::home_dir() {
+        for folder in DEFAULT_SCAN_FOLDERS {
+            results.extend(scan_folder_for_skyrim(&home.join(folder), 4));
+        }
+    }
+    for path in extra_search_paths {
+        results.extend(scan_folder_for_skyrim(path, 6));
+    }
+    results
+}
+
+/// The full scan: every Wine/Proton/PortProton/Lutris/Heroic/Bottles/
+/// CrossOver prefix, plus the default and custom folder locations above.
+/// This is what `detect-game` (no `--path`) actually calls.
+pub fn scan_all_locations(extra_search_paths: &[std::path::PathBuf]) -> Vec<DetectedGame> {
+    let mut results = scan_all_prefixes_for_skyrim();
+    results.extend(scan_custom_locations(extra_search_paths));
     results
 }
 

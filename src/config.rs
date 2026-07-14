@@ -15,6 +15,14 @@ pub struct Config {
     pub known_games: Vec<GameInstall>,
     pub active_game_id: Option<String>,
     pub active_profile: Option<String>,
+    /// Extra folders to check for a Skyrim install alongside the usual
+    /// Wine/Proton/PortProton/Lutris/etc. prefixes and the default
+    /// Downloads/Games/Desktop scan — for anyone whose copy lives
+    /// somewhere non-standard (a second drive, a portable install, a
+    /// DRM-free copy extracted by hand, etc). Persisted so it only needs
+    /// to be added once.
+    #[serde(default)]
+    pub extra_search_paths: Vec<std::path::PathBuf>,
 }
 
 /// Outcome of loading config when the on-disk file may be corrupt.
@@ -139,5 +147,18 @@ impl Config {
     pub fn active_game(&self) -> Option<&GameInstall> {
         let id = self.active_game_id.as_ref()?;
         self.known_games.iter().find(|g| &g.id == id)
+    }
+
+    /// Add a custom folder to scan for a Skyrim install. No-op (not an
+    /// error) if it's already present, so re-running the add command is
+    /// harmless.
+    pub fn add_search_path(&mut self, path: std::path::PathBuf) {
+        if !self.extra_search_paths.contains(&path) {
+            self.extra_search_paths.push(path);
+        }
+    }
+
+    pub fn remove_search_path(&mut self, path: &std::path::Path) {
+        self.extra_search_paths.retain(|p| p != path);
     }
 }
