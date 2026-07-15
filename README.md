@@ -13,9 +13,7 @@ In Cargo/semver terms that's `0.1.0`, `0.2.0`, ... `0.19.0`, then `1.0.0` at
 the 20th release, since Cargo requires real semver. This is `0.1.0` / v0.01.
 
 ### Prefix & install detection
-- Detects Skyrim installs across **Steam/Proton, PortProton, Lutris,
-  Heroic Games Launcher, Bottles, CrossOver, plain `~/.wine`, and a custom
-  `$WINEPREFIX`** — not just Steam.
+- Detects Skyrim installs
 - Inside each prefix, figures out which `drive_c/users/<name>` folder is
   actually in use without assuming it's `steamuser` (Proton's default) —
   it could just as easily be your real Linux username (Lutris/Bottles/
