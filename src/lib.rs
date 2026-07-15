@@ -22,13 +22,18 @@
 //!                native Windows path.
 
 pub mod app_paths;
+pub mod backup;
+pub mod bsa;
 pub mod check;
 pub mod color;
 pub mod config;
+pub mod fomod;
 pub mod game;
 pub mod ini;
+pub mod nxm;
 pub mod prefix;
 pub mod profile;
+pub mod saves;
 pub mod store;
 pub mod validate;
 pub mod vfs;

@@ -21,8 +21,9 @@
 //!   [4..6)   size (u16 LE)
 //!   [6..6+size) data — for MAST, a null-terminated ASCII/UTF-8 string
 
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Read the list of master plugin filenames a single .esp/.esm/.esl
 /// requires. Returns an empty list (rather than erroring) for anything that
@@ -114,6 +115,178 @@ pub fn check_missing_masters(
         }
     }
     problems
+}
+
+/// Build a master-dependency graph for the given plugins. Edges point from
+/// a plugin to each of its masters that are also in the enabled set (so
+/// "A depends on B" means A → B and B should load before A).
+fn master_edges(
+    plugins: &[String],
+    find_plugin_path: &impl Fn(&str) -> Option<PathBuf>,
+) -> HashMap<String, Vec<String>> {
+    let lower_to_canonical: HashMap<String, String> = plugins
+        .iter()
+        .map(|p| (p.to_lowercase(), p.clone()))
+        .collect();
+    let mut edges: HashMap<String, Vec<String>> = HashMap::new();
+    for plugin in plugins {
+        edges.entry(plugin.clone()).or_default();
+        let Some(path) = find_plugin_path(plugin) else {
+            continue;
+        };
+        for master in read_masters(&path) {
+            if let Some(canonical) = lower_to_canonical.get(&master.to_lowercase()) {
+                if !canonical.eq_ignore_ascii_case(plugin) {
+                    edges
+                        .entry(plugin.clone())
+                        .or_default()
+                        .push(canonical.clone());
+                }
+            }
+        }
+    }
+    edges
+}
+
+/// Detect circular master dependencies among enabled plugins. Each cycle is
+/// returned as a list of plugin names ending with the first name again so
+/// the chain reads as a loop (e.g. `A -> B -> A`).
+pub fn find_cycles(
+    plugins: &[String],
+    find_plugin_path: impl Fn(&str) -> Option<PathBuf>,
+) -> Vec<Vec<String>> {
+    let edges = master_edges(plugins, &find_plugin_path);
+    let mut cycles = Vec::new();
+    let mut global_visited: HashSet<String> = HashSet::new();
+
+    for start in plugins {
+        if global_visited.contains(&start.to_lowercase()) {
+            continue;
+        }
+        let mut path: Vec<String> = Vec::new();
+        let mut on_stack: HashSet<String> = HashSet::new();
+        dfs_cycles(
+            start,
+            &edges,
+            &mut path,
+            &mut on_stack,
+            &mut global_visited,
+            &mut cycles,
+        );
+    }
+    cycles
+}
+
+fn dfs_cycles(
+    node: &str,
+    edges: &HashMap<String, Vec<String>>,
+    path: &mut Vec<String>,
+    on_stack: &mut HashSet<String>,
+    global_visited: &mut HashSet<String>,
+    cycles: &mut Vec<Vec<String>>,
+) {
+    let key = node.to_lowercase();
+    if on_stack.contains(&key) {
+        if let Some(start) = path.iter().position(|p| p.eq_ignore_ascii_case(node)) {
+            let mut cycle: Vec<String> = path[start..].to_vec();
+            cycle.push(node.to_string());
+            // Dedup by normalized signature.
+            let sig: Vec<String> = cycle.iter().map(|s| s.to_lowercase()).collect();
+            if !cycles.iter().any(|c| {
+                c.iter().map(|s| s.to_lowercase()).collect::<Vec<_>>() == sig
+            }) {
+                cycles.push(cycle);
+            }
+        }
+        return;
+    }
+    if global_visited.contains(&key) {
+        return;
+    }
+    global_visited.insert(key.clone());
+    on_stack.insert(key.clone());
+    path.push(node.to_string());
+
+    if let Some(deps) = edges.get(node) {
+        for dep in deps {
+            dfs_cycles(dep, edges, path, on_stack, global_visited, cycles);
+        }
+    } else {
+        // Edge map keys are canonical names; also try case-insensitive match.
+        for (k, deps) in edges {
+            if k.eq_ignore_ascii_case(node) {
+                for dep in deps {
+                    dfs_cycles(dep, edges, path, on_stack, global_visited, cycles);
+                }
+                break;
+            }
+        }
+    }
+
+    path.pop();
+    on_stack.remove(&key);
+}
+
+/// Topologically sort plugins so every master loads before the plugins that
+/// require it. On cycles, returns `Err` with the same cycle lists as
+/// [`find_cycles`]. Stable among independent plugins (preserves relative
+/// order of the input where the graph does not constrain them).
+pub fn sort_plugins(
+    plugins: &[String],
+    find_plugin_path: impl Fn(&str) -> Option<PathBuf>,
+) -> Result<Vec<String>, Vec<Vec<String>>> {
+    let cycles = find_cycles(plugins, &find_plugin_path);
+    if !cycles.is_empty() {
+        return Err(cycles);
+    }
+
+    // Edge: plugin → master means plugin depends on master.
+    // For Kahn's algorithm we need indegree on "must come after" edges:
+    // master must load before plugin ⇒ edge master → plugin.
+    let dep_edges = master_edges(plugins, &find_plugin_path);
+    let mut successors: HashMap<String, Vec<String>> = HashMap::new();
+    let mut indegree: HashMap<String, usize> = HashMap::new();
+    for p in plugins {
+        indegree.entry(p.clone()).or_insert(0);
+        successors.entry(p.clone()).or_default();
+    }
+    for (plugin, masters) in &dep_edges {
+        for master in masters {
+            successors
+                .entry(master.clone())
+                .or_default()
+                .push(plugin.clone());
+            *indegree.entry(plugin.clone()).or_insert(0) += 1;
+        }
+    }
+
+    // Seed queue in original order so independent plugins keep relative order.
+    let mut queue: VecDeque<String> = VecDeque::new();
+    for p in plugins {
+        if indegree.get(p).copied().unwrap_or(0) == 0 {
+            queue.push_back(p.clone());
+        }
+    }
+
+    let mut sorted = Vec::with_capacity(plugins.len());
+    while let Some(node) = queue.pop_front() {
+        sorted.push(node.clone());
+        let nexts = successors.get(&node).cloned().unwrap_or_default();
+        for next in nexts {
+            if let Some(d) = indegree.get_mut(&next) {
+                *d = d.saturating_sub(1);
+                if *d == 0 {
+                    queue.push_back(next);
+                }
+            }
+        }
+    }
+
+    if sorted.len() != plugins.len() {
+        // Should be unreachable if cycle detection worked, but fail safe.
+        return Err(find_cycles(plugins, find_plugin_path));
+    }
+    Ok(sorted)
 }
 
 #[cfg(test)]

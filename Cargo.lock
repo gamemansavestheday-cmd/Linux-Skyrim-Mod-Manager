@@ -3040,6 +3040,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "roxmltree"
+version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3cd14fd5e3b777a7422cca79358c57a8f6e3a703d9ac187448d0daf220c2407f"
+
+[[package]]
 name = "rustc-hash"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3254,7 +3260,7 @@ checksum = "8ee5873ec9cce0195efcb7a4e9507a04cd49aec9c83d0389df45b1ef7ba2e649"
 
 [[package]]
 name = "skyrim_modmgr"
-version = "0.1.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -3267,6 +3273,7 @@ dependencies = [
  "getrandom 0.2.15",
  "junction",
  "rfd",
+ "roxmltree",
  "serde",
  "serde_json",
  "sevenz-rust",

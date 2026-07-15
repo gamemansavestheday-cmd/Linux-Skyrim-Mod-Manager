@@ -10,7 +10,7 @@ use crate::game::GameInstall;
 /// currently active, and which profile is currently active for it. This is
 /// what lets `deploy` be a one-word command after the first setup, instead
 /// of requiring `--install-dir`/`--my-games-dir` every single time.
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
     pub known_games: Vec<GameInstall>,
     pub active_game_id: Option<String>,
@@ -23,6 +23,34 @@ pub struct Config {
     /// to be added once.
     #[serde(default)]
     pub extra_search_paths: Vec<std::path::PathBuf>,
+    /// Set after the user has seen the one-time Backup explainer dialog so
+    /// we only show it the first time they press Backup.
+    #[serde(default)]
+    pub backup_intro_seen: bool,
+    /// Last-used "include mods" toggle for the Backup tab.
+    #[serde(default = "default_true")]
+    pub backup_include_mods: bool,
+    /// Last-used "include saves" toggle for the Backup tab.
+    #[serde(default = "default_true")]
+    pub backup_include_saves: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            known_games: Vec::new(),
+            active_game_id: None,
+            active_profile: None,
+            extra_search_paths: Vec::new(),
+            backup_intro_seen: false,
+            backup_include_mods: true,
+            backup_include_saves: true,
+        }
+    }
 }
 
 /// Outcome of loading config when the on-disk file may be corrupt.

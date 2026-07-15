@@ -411,6 +411,52 @@ impl ModStore {
         Ok(())
     }
 
+    /// Allocate a fresh mod id + empty content directory under the store.
+    /// Used by multi-step installers (e.g. FOMOD) that need to write files
+    /// before the entry is registered in `store.json`.
+    pub fn begin_content_dir(paths: &AppPaths) -> Result<(String, PathBuf)> {
+        let id = Uuid::new_v4().to_string();
+        let content_dir = paths.mods.join(&id);
+        fs::create_dir_all(&content_dir).with_context(|| {
+            format!("creating mod content directory {}", content_dir.display())
+        })?;
+        Ok((id, content_dir))
+    }
+
+    /// Register a content directory that was already populated (e.g. by a
+    /// FOMOD installer) as a store entry. Normalizes the root layout first.
+    pub fn register_installed(
+        &mut self,
+        paths: &AppPaths,
+        id: String,
+        content_dir: PathBuf,
+        display_name: String,
+    ) -> Result<()> {
+        if !content_dir.is_dir() {
+            bail!(
+                "content directory does not exist: {}",
+                content_dir.display()
+            );
+        }
+        normalize_root(&content_dir)
+            .with_context(|| format!("normalizing mod root {}", content_dir.display()))?;
+        let entry = ModEntry {
+            id: id.clone(),
+            name: display_name,
+            version: None,
+            installed_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+            content_dir,
+            root_normalized: true,
+            tags: Vec::new(),
+        };
+        self.mods.push(entry);
+        self.save(paths)?;
+        Ok(())
+    }
+
     /// Disk space used by each mod's content dir, in bytes, plus the total.
     /// Useful for people who install a hundred 4K texture mods and then
     /// wonder where their SSD went.
@@ -439,6 +485,12 @@ impl ModStore {
 /// folder, or a single subfolder with no game files at this level) so the
 /// stored content_dir's *top level* is what should be mirrored directly into
 /// the game's Data folder.
+/// Unwrap common archive wrapper folders so `content_dir`'s top level mirrors
+/// what should land under the game's `Data` folder. Public for FOMOD installs.
+pub fn normalize_root_public(dir: &Path) -> Result<()> {
+    normalize_root(dir)
+}
+
 fn normalize_root(dir: &Path) -> Result<()> {
     const GAME_MARKERS: &[&str] = &[
         "meshes", "textures", "scripts", "interface", "sound", "music", "seq", "skse",
@@ -488,6 +540,18 @@ fn normalize_root(dir: &Path) -> Result<()> {
         // in the file conflict view and can fix it manually if needed.
         return Ok(());
     }
+}
+
+/// Extract (or copy) a source archive/folder into `dest`. Public so the
+/// FOMOD installer and other multi-step flows can unpack first, then decide
+/// which files to keep.
+pub fn extract_archive_to(source: &Path, dest: &Path) -> Result<()> {
+    if !source.exists() {
+        bail!("source path does not exist: {}", source.display());
+    }
+    fs::create_dir_all(dest)
+        .with_context(|| format!("creating extract destination {}", dest.display()))?;
+    install_source_into(source, dest)
 }
 
 /// Extract/copy `source` into `content_dir`, dispatching on what `source`
