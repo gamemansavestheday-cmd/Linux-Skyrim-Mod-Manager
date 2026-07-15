@@ -2,7 +2,9 @@
 
 A cross-platform (Linux + Windows) Skyrim mod manager built around a
 symlink/junction-based virtual file system, a global mod store, and
-per-game profiles. MIT licensed.
+per-game profiles works on Steam/PortProton/Lutris/Heroic/Proton/Wine. MIT licensed
+
+<img width="2000" height="1440" alt="image" src="https://github.com/user-attachments/assets/89fb18c0-d35d-4a61-b450-942ca691daa9" />
 
 **Versioning:** this project counts up 0.01, 0.02, 0.03, ... and hits 1.00
 at 0.20 (20 releases to a stable 1.0 — pick your own reason for the number).
@@ -30,6 +32,8 @@ the 20th release, since Cargo requires real semver. This is `0.1.0` / v0.01.
   labeled with the real game name, not just a bare app id, and checks
   `libraryfolders.vdf` so a Skyrim install on a second drive is still found.
 
+<img width="2000" height="1440" alt="image" src="https://github.com/user-attachments/assets/8276c241-5980-43d6-92f8-c9420695453e" />
+
 ### Persistence
 - Every confirmed game install is remembered in `config.json` (id, edition,
   paths) so `deploy`/`restore` work with **zero flags** after the first
@@ -40,6 +44,7 @@ the 20th release, since Cargo requires real semver. This is `0.1.0` / v0.01.
   silently orphaned the vanilla-`Data` backup and broken `restore` the
   moment you re-ran `detect-game` after a reboot. Caught and fixed before
   shipping — see the smoke-test section below for how it was verified.
+<img width="3840" height="2026" alt="image" src="https://github.com/user-attachments/assets/da4e5539-e5c8-4b31-bdf4-4fc59477db8b" />
 
 ### Mod store — "install anything"
 - Installs from an already-extracted **folder**, a **`.zip`**, a **`.7z`**,
@@ -56,6 +61,7 @@ the 20th release, since Cargo requires real semver. This is `0.1.0` / v0.01.
   when your SSD mysteriously fills up after 200 texture mods.
 - `.rar` is explicitly rejected with a clear message (no MIT-licensed
   pure-Rust RAR decoder exists) rather than silently failing.
+<img width="3840" height="2026" alt="image" src="https://github.com/user-attachments/assets/eabdc6a0-49f6-470d-978a-8fece65e7308" />
 
 ### Profiles
 - Ordered mod list (priority order, last wins on file conflicts) + a
@@ -104,6 +110,7 @@ the 20th release, since Cargo requires real semver. This is `0.1.0` / v0.01.
   *first* time a profile is deployed for that game and restored via
   `restore` — the real install is never overwritten in place, and
   redeploying (including switching profiles) is idempotent.
+<img width="3840" height="2026" alt="image" src="https://github.com/user-attachments/assets/2fe16306-474e-47a4-bcbc-e83366f61a96" />
 
 ## Project layout
 
@@ -175,54 +182,3 @@ skyrim-modmgr restore
 # INI tweaks
 skyrim-modmgr set-ini "path/to/Skyrim.ini" Display iMaxAnisotropy 16
 ```
-
-## What was actually verified this session (not just written)
-
-Run against synthetic mods/games in the sandbox this was built in:
-- Deterministic game IDs stay identical across repeated `detect-game` runs
-  (the exact bug this fix targets).
-- Install from a folder with a wrapper directory → correctly unwrapped.
-- Two mods with an intentionally overlapping file, **different case**
-  (`armor.nif` vs `Armor.nif`) → correctly resolved as *one* conflicting
-  path with the higher-priority mod winning, not two separate files.
-- Enabling a mod with a real `.esp` auto-registered it into the profile's
-  plugin order; `deploy` wrote a correct `plugins.txt`.
-- A real `TES4`/`MAST` binary header requiring a missing master →
-  `validate` correctly flagged it; a well-formed profile → correctly
-  reported clean.
-- `update` replaced a mod's content while keeping its id and the profile
-  reference intact.
-- Full deploy → symlinked `Data`, vanilla folder backed up, save-game
-  snapshotted → `restore` → vanilla folder returned exactly as it was.
-- Tags, disk-usage, clone/rename/delete-profile, use-game, and mod removal
-  correctly scrubbing profile references were all exercised via the CLI.
-- A broken-pipe panic (a standard Rust CLI gotcha when output is piped
-  into `head`/`less`) was caught during testing and fixed with a proper
-  exit-quietly panic hook.
-
-## What's written but not build-tested here
-
-The sandbox this was built in only had an apt-provided `rustc 1.75`
-available (no network access to rustup's distribution server), and both
-`eframe`/`egui` and the Windows-only crates (`junction`) need a newer
-stable toolchain / the Windows target respectively — neither is a
-limitation of the code, just of this sandbox:
-- **`vfs/windows.rs`** — junctions + hardlinks, no admin required, with a
-  copy-fallback across volumes.
-- **`bin/gui.rs`** — the egui GUI (Mods/Profile/Deploy tabs, multi-install
-  picker window, search/filter, tags). It was checked with a syntax-only
-  `rustc --emit=metadata` pass in this sandbox (confirms no parse errors)
-  but not fully type-checked/run, since that needs `eframe` which needs a
-  newer toolchain than was available here.
-
-Build these yourself with a current Rust via [rustup](https://rustup.rs);
-nothing about them depends on anything sandbox-specific.
-
-## Known gaps / honest next steps
-
-- **No BSA unpacking** — Skyrim loads `.bsa` archives directly so this is
-  usually fine, but there's no support for unpacking a BSA to resolve
-  conflicts at individual-loose-file granularity against it.
-  `validate::read_masters`, and the Linux VFS mount/unmount round-trip
-  would be the highest-value next step before relying on this with a real
-  modlist.
