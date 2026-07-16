@@ -1,5 +1,7 @@
 # Linux Skyrim Mod Manager
 
+_NOTE THIS TOOL IS NOT GETTING A UPDATE UNTIL I GET 2 STARS_
+
 A cross-platform (Linux + Windows) Skyrim mod manager built around a
 symlink/junction-based virtual file system, a global mod store, and
 per-game profiles works on Steam/PortProton/Lutris/Heroic/Proton/Wine. MIT licensed
